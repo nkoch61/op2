@@ -1,0 +1,33 @@
+e=Environment(CC = 'avr-gcc',
+              CCFLAGS='-mmcu=atmega32 -std=gnu11 -O3 -mcall-prologues -g -mrelax -Wall -Wno-unused-function -Wno-missing-braces',
+              CPPDEFINES = ['F_CPU=8000000',
+                            'UART_CBUF_LEN=80' ],
+              LINKFLAGS='-mmcu=atmega32')
+elf=e.Program('op2.elf',
+              [ 'main.c',
+                'keytable.c',
+                'scancodefuncs.c',
+                'timer.c',
+                'kbdscan.c',
+                'ps2io.c',
+                'ps2protocol.c',
+                'typematic.c',
+                'cmdint.c',
+                'switches.c',
+                'uart.c',
+                'timerint.c' ])
+hex=e.Command('op2.hex', elf, "avr-objcopy -j .text -j .data -O ihex $SOURCE $TARGET")
+e.Command('burn', hex,       "avrdude -c stk500v2 -P /dev/ttyACM0 -p m32 -v -U flash:w:$SOURCE")
+e.Command('uburn', hex,      "avrdude -c usbasp                   -p m32 -v -U flash:w:$SOURCE")
+e.Command('burnfuses', hex,  "avrdude -c stk500v2 -P /dev/ttyACM0 -p m32 -v -U lfuse:w:0x3F:m      -U hfuse:w:0xc9:m")
+e.Command('uburnfuses', hex, "avrdude -c usbasp                   -p m32 -v -U lfuse:w:0x3F:m      -U hfuse:w:0xc9:m")
+e.Command('readfuses', hex,  "avrdude -c stk500v2 -P /dev/ttyACM0 -p m32 -v -U lfuse:r:lfuse.hex:i -U hfuse:r:hfuse.hex:i")
+e.Command('ureadfuses', hex, "avrdude -c usbasp                   -p m32 -v -U lfuse:r:lfuse.hex:i -U hfuse:r:hfuse.hex:i")
+e.Command('verify', hex,     "avrdude -c stk500v2 -P /dev/ttyACM0 -p m32 -v -U flash:v:$SOURCE:i")
+e.Command('uverify', hex,    "avrdude -c usbasp                   -p m32 -v -U flash:v:$SOURCE:i")
+e.Command('read', [],        "avrdude -c stk500v2 -P /dev/ttyACM0 -p m32 -v -U flash:r:avrdude_readback.hex:i")
+e.Command('uread', [],       "avrdude -c usbasp                   -p m32 -v -U flash:r:avrdude_readback.hex:i")
+e.Command('erase', [],       "avrdude -c stk500v2 -P /dev/ttyACM0 -p m32 -F -v -e")
+e.Command('terminal', [],    "avrdude -c stk500v2 -P /dev/ttyACM0 -p m32 -F -v -t")
+e.Clean(hex, e.Glob ('*~'))
+e.Default(hex)
