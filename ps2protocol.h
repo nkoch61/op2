@@ -1,5 +1,5 @@
 /*
- * $Header: /home/playground/src/atmega32/op2/ps2protocol.h,v 6c071e9e91df 2022/01/02 22:21:58 nkoch $
+ * $Header: /home/playground/src/atmega32/op2/ps2protocol.h,v bc5c1b69a904 2022/01/22 21:53:05 nkoch $
  */
 
 
@@ -9,6 +9,7 @@
 
 #include <setjmp.h>
 #include "scancodebuf.h"
+#include "replybuf.h"
 
 
 typedef struct
@@ -21,11 +22,11 @@ typedef struct
   void (*from_host) (uint8_t command, uint8_t parameter);
   void (*error) (uint8_t t);
   struct sc_CBuf *scancodes;
-  uint8_t state, prev_state;
-  uint8_t rstate;
-  uint8_t last_sent;
-  jmp_buf inhibit, rts, resend;
-  long reset_ack_delay, inhibit_wait_timeout;
+  struct reply_CBuf reply;
+  uint8_t send_state;
+  uint8_t last_sent, last_received;
+  bool reset;
+  long reset_delay;
 }
 PS2ProtocolContext;
 
@@ -49,10 +50,18 @@ enum PS2Commands
   cENABLE               = 0xf4,
   cDISABLE              = 0xf5,
   cDEFAULT              = 0xf6,
-  cACK                  = 0xfa,
-  cERROR                = 0xfc,
+  cALLKTTM              = 0xf7,
+  cALLKTMB              = 0xf8,
+  cALLKTM               = 0xf9,
+  cALLKTMBT             = 0xfa,
+  cKTTM                 = 0xfb,
+  cKTMB                 = 0xfc,
+  cKTM                  = 0xfd,
   cRESEND               = 0xfe,
   cRESET                = 0xff,
+
+  cACK                  = 0xfa,
+  cERROR                = 0xfc,
 };
 
 

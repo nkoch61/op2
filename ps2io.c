@@ -1,5 +1,5 @@
 /*
- * $Header: /home/playground/src/atmega32/op2/ps2io.c,v 765afcbcd919 2021/12/29 22:56:35 nkoch $
+ * $Header: /home/playground/src/atmega32/op2/ps2io.c,v b5d576feef86 2022/01/08 21:46:27 nkoch $
  */
 
 
@@ -14,8 +14,8 @@ void ps2_set_clk (bool state)
 {
   if (state == HI)
   {
-    DDR_CLK  &= ~MASK_CLK;
     PORT_CLK |=  MASK_CLK;
+    DDR_CLK  &= ~MASK_CLK;
   }
   else
   {
@@ -29,8 +29,8 @@ void ps2_set_dta (bool state)
 {
   if (state == HI)
   {
-    DDR_DTA  &= ~MASK_DTA;
     PORT_DTA |=  MASK_DTA;
+    DDR_DTA  &= ~MASK_DTA;
   }
   else
   {

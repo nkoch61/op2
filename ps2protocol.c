@@ -1,5 +1,5 @@
 /*
- * $Header: /home/playground/src/atmega32/op2/ps2protocol.c,v 6c071e9e91df 2022/01/02 22:21:58 nkoch $
+ * $Header: /home/playground/src/atmega32/op2/ps2protocol.c,v bc5c1b69a904 2022/01/22 21:53:05 nkoch $
  */
 
 
@@ -20,56 +20,20 @@
 #include "ps2protocol.h"
 
 
-enum PS2ProtocolState
-{
-  ps2_INIT,
-  ps2_RESEND,
-  ps2_RESET_ACK,
-  ps2_RESET,
-  ps2_IDLE,
-  ps2_INHIBIT,
-  ps2_INHIBIT_WAIT,
-  ps2_RECEIVE,
-  ps2_TRANSMIT,
-};
-
-
-enum PS2ProtocolReceiveState
-{
-  ps2_RECEIVE_COMMAND,
-  ps2_RECEIVE_LEDS,
-  ps2_RECEIVE_SCANCODESET,
-  ps2_RECEIVE_TYPEMATIC,
-};
-
-
 #define IDLE()          (c->get_dta () && c->get_clk ())
+#define HOSTREQ()       (!c->get_clk () || !c->get_dta ())
 #define INHIBIT()       (!c->get_clk ())
 #define RTS()           (c->get_clk () && !c->get_dta ())
 
 
-static inline void ps2_inhibit_check (PS2ProtocolContext *c)
+enum SendState
 {
-  if (INHIBIT ())
-  {
-    sei ();
-    longjmp (c->inhibit, 1);
-  }
-}
-
-
-static inline void ps2_rts_check (PS2ProtocolContext *c)
-{
-  if (RTS())
-  {
-    longjmp (c->rts, 1);
-  }
-}
+  S0, S1, S2
+};
 
 
 static inline void ps2_transmit_bit (PS2ProtocolContext *c, bool bit)
 {
-  ps2_inhibit_check (c);
   c->set_dta (bit);
   _delay_us (15);
   c->set_clk (LO);
@@ -91,7 +55,7 @@ static void ps2_transmit_byte (PS2ProtocolContext *c, uint8_t byte)
   ps2_transmit_bit (c, parity_even_bit (byte) ? LO : HI);
   ps2_transmit_bit (c, HI);
   sei ();
-  if (byte != cRESEND && byte != cACK)
+  if (byte != cRESEND)
   {
     c->last_sent = byte;
   }
@@ -100,7 +64,6 @@ static void ps2_transmit_byte (PS2ProtocolContext *c, uint8_t byte)
 
 static inline bool ps2_receive_bit (PS2ProtocolContext *c, bool ack)
 {
-  ps2_inhibit_check (c);
   _delay_us (15);
   const bool bit = c->get_dta ();
   if (ack)
@@ -113,6 +76,7 @@ static inline bool ps2_receive_bit (PS2ProtocolContext *c, bool ack)
   c->set_clk (HI);
   if (ack)
   {
+    _delay_us (15);
     c->set_dta (HI);
   };
   return bit;
@@ -137,102 +101,124 @@ static uint8_t ps2_receive_byte (PS2ProtocolContext *c)
       ||
       stopbit != HI)
   {
-    longjmp (c->resend, 1);
+    cli ();
+    for (int i = -1; ++i < 11;)
+    {
+      if (c->get_dta () == HI)
+      {
+        break;
+      };
+      ps2_receive_bit (c, true);
+    };
+    sei ();
+    if (c->get_dta () == LO)
+    {
+      c->error (ps2_ERROR_DTA_STUCK);
+    };
+    return 0xef;        /* illegales Kommando */
   };
   return byte;
 }
 
 
-static void ps2_receive_command_handler (PS2ProtocolContext *c, uint8_t byte)
+static void ps2_receive_handler (PS2ProtocolContext *c, uint8_t byte)
 {
+  const uint8_t last_received = c->last_received;
+
+  c->last_received = byte;
+  reply_clear (&c->reply);
+
   switch (byte)
   {
     case cECHO:
-      ps2_transmit_byte (c, cECHO);
+      reply_put (&c->reply, cECHO);
       return;
 
     case cRESEND:
-      ps2_transmit_byte (c, c->last_sent);
+      reply_put (&c->reply, c->last_sent);
       return;
 
     case cRESET:
-      c->state = ps2_RESET_ACK;
-      mark (&c->reset_ack_delay);
+      reply_put (&c->reply, cACK);
+      c->from_host (cDISABLE, 0);
+      mark (&c->reset_delay);
+      c->reset = true;
       return;
 
-    default:
-      ps2_transmit_byte (c, cACK);
-      break;
-  };
-  switch (byte)
-  {
     case cLEDS:
-      c->rstate = ps2_RECEIVE_LEDS;
-      break;
+      reply_put (&c->reply, cACK);
+      return;
 
     case cSCANCODESET:
-      c->rstate = ps2_RECEIVE_SCANCODESET;
-      break;
+      reply_put (&c->reply, cACK);
+      return;
 
     case cREADID:
-      ps2_transmit_byte (c, 0xab);
-      ps2_transmit_byte (c, 0x83);
-      break;
+      reply_put (&c->reply, cACK);
+      reply_put (&c->reply, 0xab);
+      reply_put (&c->reply, 0x83);
+      return;
 
     case cTYPEMATIC:
-      c->rstate = ps2_RECEIVE_TYPEMATIC;
-      break;
+      reply_put (&c->reply, cACK);
+      return;
 
     case cENABLE:
     case cDISABLE:
     case cDEFAULT:
+      reply_put (&c->reply, cACK);
       c->from_host (byte, 0);
-      break;
-
-    default:
-      c->state = ps2_RESET;
-      break;
-  }
-}
-
-
-static void ps2_receive_handler (PS2ProtocolContext *c, uint8_t byte)
-{
-  switch (c->rstate)
-  {
-    case ps2_RECEIVE_COMMAND:
-      ps2_receive_command_handler (c, byte);
       return;
 
-    case ps2_RECEIVE_LEDS:
-      ps2_transmit_byte (c, cACK);
-      c->from_host (cLEDS, byte);
-      break;
+    case cKTTM:
+    case cKTMB:
+    case cKTM:
+    case cALLKTTM:
+    case cALLKTMB:
+    case cALLKTM:
+    case cALLKTMBT:
+      reply_put (&c->reply, cACK);
+      return;
 
-    case ps2_RECEIVE_SCANCODESET:
-      ps2_transmit_byte (c, cACK);
-      switch (byte)
+
+    default:
+      switch (last_received)
       {
-        case 0:
-          ps2_transmit_byte (c, 2);
+        case cLEDS:
+          reply_put (&c->reply, cACK);
+          c->from_host (cLEDS, byte);
+          return;
+
+        case cSCANCODESET:
+          reply_put (&c->reply, cACK);
+          switch (byte)
+          {
+            case 0:
+              reply_put (&c->reply, 2);
+              return;
+
+            default:
+              c->from_host (cSCANCODESET, byte);
+              return;
+          };
+
+        case cTYPEMATIC:
+          reply_put (&c->reply, cACK);
+          c->from_host (cTYPEMATIC, byte);
+          return;
+
+        case cKTTM:
+        case cKTMB:
+        case cKTM:
+          reply_put (&c->reply, cACK);
+          c->last_received = cKTM;
           break;
 
         default:
-          c->from_host (cSCANCODESET, byte);
-          break;
-      };
-      break;
-
-    case ps2_RECEIVE_TYPEMATIC:
-      ps2_transmit_byte (c, cACK);
-      c->from_host (cTYPEMATIC, byte);
-      break;
-
-    default:
-      c->state = ps2_RESET;
-      break;
-  };
-  c->rstate = ps2_RECEIVE_COMMAND;
+          reply_put (&c->reply, cRESEND);
+          return;
+      }
+  }
 }
 
 
@@ -240,122 +226,72 @@ void ps2protocol (PS2ProtocolContext *c)
 {
   Scancode scancode;
 
-  if (setjmp (c->inhibit))
+  if (INHIBIT())
   {
-    c->state = ps2_INHIBIT;
-  };
-  if (setjmp (c->rts))
-  {
-    c->state = ps2_RECEIVE;
-  };
-  if (setjmp (c->resend))
-  {
-    c->state = ps2_RESEND;
-  };
-
-  for (;;)
-  {
-    if (c->state != c->prev_state)
+    for (int i = -1; INHIBIT() && ++i < 200/5;)
     {
-      PORT_DEBUG ^= MASK_DEBUG & ((c->state ^ c->prev_state) << SHIFT_DEBUG);
-      c->prev_state = c->state;
+      _delay_us (5);
     };
-
-    switch (c->state)
+    if (INHIBIT())
     {
-      case ps2_RESEND:
-        for (int i = -1; ++i < 11;)
-        {
-          if (c->get_dta () == HI)
-          {
-            break;
-          };
-          ps2_receive_bit (c, true);
-        };
-        if (c->get_dta () == LO)
-        {
-          c->error (ps2_ERROR_DTA_STUCK);
-          return;
-        };
-        ps2_transmit_byte (c, cRESEND);
-        c->state = ps2_IDLE;
-        return;
+      c->error (ps2_ERROR_CLK_STUCK);
+      return;
+    }
+  };
+  if (RTS())
+  {
+    ps2_receive_handler (c, ps2_receive_byte (c));
+    c->send_state = S0;
+  };
 
-      case ps2_RESET_ACK:
-        ps2_inhibit_check (c);
-        ps2_rts_check (c);
-        if (elapsed (&c->reset_ack_delay) >= 300)
-        {
-          ps2_transmit_byte (c, cACK);
-          c->state = ps2_RESET;
-        };
-        return;
+  if (!reply_empty (&c->reply))
+  {
+    ps2_transmit_byte (c, reply_get (&c->reply));
+    return;
+  };
 
-      case ps2_RESET:
-        c->rstate = ps2_RECEIVE_COMMAND;
-        c->set_dta (HI);
-        c->set_clk (HI);
-        ps2_inhibit_check (c);
-        ps2_rts_check (c);
-        _delay_us (50);
-        if (IDLE())
-        {
-          ps2_transmit_byte (c, cINITOK);
-          c->state = ps2_IDLE;
-        };
-        return;
+  if (c->reset)
+  {
+    if (elapsed (&c->reset_delay) >= 500)
+    {
+      reply_put (&c->reply, cINITOK);
+      c->from_host (cENABLE, 0);
+      c->reset = false;
+    };
+    return;
+  };
 
-      case ps2_IDLE:
-        c->set_dta (true);
-        c->set_clk (true);
-        ps2_inhibit_check (c);
-        ps2_rts_check (c);
-        if (c->rstate == ps2_RECEIVE_COMMAND && !sc_empty (c->scancodes))
-        {
-          c->state = ps2_TRANSMIT;
-        };
-        return;
-
-      case ps2_INHIBIT:
-        mark (&c->inhibit_wait_timeout);
-        c->state = ps2_INHIBIT_WAIT;
-        /* FALLTHROUGH */
-
-      case ps2_INHIBIT_WAIT:
-        _delay_us (5);
-        ps2_rts_check (c);
-        if (!INHIBIT())
-        {
-          c->state = ps2_IDLE;
-        }
-        else if (elapsed (&c->inhibit_wait_timeout) >= 20)
-        {
-          c->error (ps2_ERROR_CLK_STUCK);
-        };
-        return;
-
-      case ps2_RECEIVE:
-        c->state = ps2_IDLE;
-        ps2_receive_handler (c, ps2_receive_byte (c));
-        return;
-
-      case ps2_TRANSMIT:
-        c->state = ps2_IDLE;
-        scancode = sc_peek (c->scancodes);
+  if (!sc_empty (c->scancodes))
+  {
+    scancode = sc_peek (c->scancodes);
+    switch (c->send_state)
+    {
+      case S0:
         if (scancode.flags & E0)
         {
           ps2_transmit_byte (c, 0xe0);
+          c->send_state = S1;
+          return;
         };
+        /* FALLTHROUGH */
+
+      case S1:
         if (scancode.flags & Brk)
         {
           ps2_transmit_byte (c, 0xf0);
+          c->send_state = S2;
+          return;
         };
+        /* FALLTHROUGH */
+
+      case S2:
         ps2_transmit_byte (c, scancode.code);
         sc_less (c->scancodes);
+        c->send_state = S0;
         return;
 
       default:
-        c->state = ps2_RESET;
+        c->send_state = S0;
         return;
     }
   }
@@ -364,9 +300,14 @@ void ps2protocol (PS2ProtocolContext *c)
 
 void initstate_ps2protocol (PS2ProtocolContext *c)
 {
-  c->state = ps2_RESET;
-  c->prev_state = ps2_INIT;
-  c->rstate = ps2_RECEIVE_COMMAND;
+  mark (&c->reset_delay);
+  c->reset = true;
+  c->send_state = S0;
+  c->last_sent = 0;
+  c->last_received = 0;
+  reply_init (&c->reply);
+  c->set_clk (HI);
+  c->set_dta (HI);
   PORT_DEBUG &= ~MASK_DEBUG;
 }
 

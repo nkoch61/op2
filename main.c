@@ -1,5 +1,5 @@
 /*
- * $Header: /home/playground/src/atmega32/op2/main.c,v a66a2aaa6ed7 2022/01/05 18:40:04 nkoch $
+ * $Header: /home/playground/src/atmega32/op2/main.c,v cf4608cb5f99 2022/01/22 16:14:02 nkoch $
  */
 
 
@@ -32,7 +32,7 @@
 #include "defs.h"
 
 
-static const __flash char program_version[] = "1.0.10 " __DATE__ " " __TIME__;
+static const __flash char program_version[] = "1.0.15 " __DATE__ " " __TIME__;
 
 
 static volatile long badcount;
@@ -281,7 +281,7 @@ static int8_t op2_kbd (int8_t argc, char **argv)
 /* Tastaturfunktion mit PS/2-Protokoll */
 static KeyboardTiming timing;
 static struct sc_CBuf scancodes;
-static bool force_numlock = false;
+static bool force_numlock = false, enabled = false;
 
 
 static void op2_kbdtr_from_host (uint8_t command,
@@ -314,11 +314,14 @@ static void op2_kbdtr_from_host (uint8_t command,
       break;
 
     case cENABLE:
+      enabled = true;
       sc_clear (&scancodes);
       dbg (PSTR("enable\r\n"), parameter);
       break;
 
     case cDISABLE:
+      enabled = false;
+      default_timing (&timing);
       dbg (PSTR("disable\r\n"), parameter);
       break;
 
@@ -354,8 +357,10 @@ static int8_t op2_kbdtranslate (int8_t argc, char **argv)
   ScancodeContext sc;
   PS2ProtocolContext pc;
   void (* const dbg) (const __flash char *fmt, ...) = sw_no_debug () ? no_printf_P : debug_printf_P;
+  bool poweron = argc == 1 && strcmp_P (argv[0], PSTR("poweron")) == 0;
 
   default_timing (&timing);
+  sc_init (&scancodes);
   initif_scancode (&sc,
                    dbg,
                    kbdscan,
@@ -373,10 +378,16 @@ static int8_t op2_kbdtranslate (int8_t argc, char **argv)
   initstate_scancode (&sc);
   initstate_ps2protocol (&pc);
 
+  enabled = true;
+
   do
   {
     sleep ();
-    next_scancode (&sc);
+    poweron = poweron && now () < 550;
+    if (enabled && !poweron)
+    {
+      next_scancode (&sc);
+    };
     ps2protocol (&pc);
     if (force_numlock && sc_empty (&scancodes))
     {
@@ -482,7 +493,9 @@ static int8_t op2_interp (int8_t argc, char **argv)
 static void init (void)
 {
   cli ();
-  uart_sleep = background_sleep;
+
+  /* PS2-Interface CLK/DTA */
+  ps2_init ();
 
   /* Eingaenge DIP-Switches */
   DDR_SWITCHES  &= ~MASK_SWITCHES;
@@ -499,9 +512,6 @@ static void init (void)
   DDR_KBDIN      =  0x00;
   PORT_KBDIN     =  0xFF;       /* Pull-Up */
 
-  /* PS2-Interface CLK/DTA */
-  ps2_init ();
-
   /* Ausgaenge Debugportbits */
   DDR_DEBUG     |=  MASK_DEBUG;
   PORT_DEBUG    &= ~MASK_DEBUG;
@@ -513,6 +523,8 @@ static void init (void)
   /* ungenutzte Eingaenge */
   DDRC          &= ~UNUSED_C;
   PORTC         |=  UNUSED_C;   /* Pull-Up */
+
+  uart_sleep = background_sleep;
 
   sei ();
 }
@@ -548,8 +560,9 @@ int main (void)
 
   if (sw_autostart_loop ())
   {
+    char *argv[2] = { "poweron", NULL };
     uart_puts_P (PSTR ("\n*** keyboard loop ***\n"));
-    op2_kbdtranslate (0, NULL);
+    op2_kbdtranslate (1, argv);
   };
   for (;;)
   {
