@@ -1,5 +1,5 @@
 /*
- * $Header: /home/playground/src/atmega32/op2/ps2protocol.c,v bc5c1b69a904 2022/01/22 21:53:05 nkoch $
+ * $Header: /home/playground/src/atmega32/op2/ps2protocol.c,v deef0b3e5c19 2022/01/29 18:49:30 nkoch $
  */
 
 
@@ -35,11 +35,11 @@ enum SendState
 static inline void ps2_transmit_bit (PS2ProtocolContext *c, bool bit)
 {
   c->set_dta (bit);
-  _delay_us (15);
+  _delay_us (17);
   c->set_clk (LO);
-  _delay_us (30);
+  _delay_us (36);
   c->set_clk (HI);
-  _delay_us (15);
+  _delay_us (17);
 }
 
 
@@ -64,19 +64,19 @@ static void ps2_transmit_byte (PS2ProtocolContext *c, uint8_t byte)
 
 static inline bool ps2_receive_bit (PS2ProtocolContext *c, bool ack)
 {
-  _delay_us (15);
+  _delay_us (17);
   const bool bit = c->get_dta ();
   if (ack)
   {
     c->set_dta (LO);
   };
-  _delay_us (15);
+  _delay_us (17);
   c->set_clk (LO);
-  _delay_us (30);
+  _delay_us (36);
   c->set_clk (HI);
   if (ack)
   {
-    _delay_us (15);
+    _delay_us (17);
     c->set_dta (HI);
   };
   return bit;
@@ -121,12 +121,19 @@ static uint8_t ps2_receive_byte (PS2ProtocolContext *c)
 }
 
 
+static void begin_bat (PS2ProtocolContext *c)
+{
+  c->from_host (cDISABLE, 0);
+  mark (&c->bat_delay);
+  c->bat_active = true;
+}
+
+
 static void ps2_receive_handler (PS2ProtocolContext *c, uint8_t byte)
 {
   const uint8_t last_received = c->last_received;
 
   c->last_received = byte;
-  reply_clear (&c->reply);
 
   switch (byte)
   {
@@ -140,9 +147,7 @@ static void ps2_receive_handler (PS2ProtocolContext *c, uint8_t byte)
 
     case cRESET:
       reply_put (&c->reply, cACK);
-      c->from_host (cDISABLE, 0);
-      mark (&c->reset_delay);
-      c->reset = true;
+      begin_bat (c);
       return;
 
     case cLEDS:
@@ -228,6 +233,10 @@ void ps2protocol (PS2ProtocolContext *c)
 
   if (INHIBIT())
   {
+    if (c->bat_active)
+    {
+      begin_bat (c);
+    };
     for (int i = -1; INHIBIT() && ++i < 200/5;)
     {
       _delay_us (5);
@@ -238,10 +247,13 @@ void ps2protocol (PS2ProtocolContext *c)
       return;
     }
   };
+
   if (RTS())
   {
-    ps2_receive_handler (c, ps2_receive_byte (c));
+    reply_clear (&c->reply);
     c->send_state = S0;
+    ps2_receive_handler (c, ps2_receive_byte (c));
+    return;
   };
 
   if (!reply_empty (&c->reply))
@@ -250,13 +262,13 @@ void ps2protocol (PS2ProtocolContext *c)
     return;
   };
 
-  if (c->reset)
+  if (c->bat_active)
   {
-    if (elapsed (&c->reset_delay) >= 500)
+    if (elapsed (&c->bat_delay) >= 500)
     {
       reply_put (&c->reply, cINITOK);
       c->from_host (cENABLE, 0);
-      c->reset = false;
+      c->bat_active = false;
     };
     return;
   };
@@ -287,8 +299,7 @@ void ps2protocol (PS2ProtocolContext *c)
       case S2:
         ps2_transmit_byte (c, scancode.code);
         sc_less (c->scancodes);
-        c->send_state = S0;
-        return;
+        /* FALLTHROUGH */
 
       default:
         c->send_state = S0;
@@ -300,15 +311,13 @@ void ps2protocol (PS2ProtocolContext *c)
 
 void initstate_ps2protocol (PS2ProtocolContext *c)
 {
-  mark (&c->reset_delay);
-  c->reset = true;
   c->send_state = S0;
   c->last_sent = 0;
   c->last_received = 0;
   reply_init (&c->reply);
   c->set_clk (HI);
   c->set_dta (HI);
-  PORT_DEBUG &= ~MASK_DEBUG;
+  begin_bat (c);
 }
 
 

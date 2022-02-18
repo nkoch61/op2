@@ -1,5 +1,5 @@
 /*
- * $Header: /home/playground/src/atmega32/op2/main.c,v cf4608cb5f99 2022/01/22 16:14:02 nkoch $
+ * $Header: /home/playground/src/atmega32/op2/main.c,v 07619b87a862 2022/01/29 18:42:31 nkoch $
  */
 
 
@@ -32,7 +32,7 @@
 #include "defs.h"
 
 
-static const __flash char program_version[] = "1.0.15 " __DATE__ " " __TIME__;
+static const __flash char program_version[] = "1.0.19 " __DATE__ " " __TIME__;
 
 
 static volatile long badcount;

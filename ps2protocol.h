@@ -1,5 +1,5 @@
 /*
- * $Header: /home/playground/src/atmega32/op2/ps2protocol.h,v bc5c1b69a904 2022/01/22 21:53:05 nkoch $
+ * $Header: /home/playground/src/atmega32/op2/ps2protocol.h,v 210edcd2f2d2 2022/01/23 16:30:50 nkoch $
  */
 
 
@@ -25,8 +25,8 @@ typedef struct
   struct reply_CBuf reply;
   uint8_t send_state;
   uint8_t last_sent, last_received;
-  bool reset;
-  long reset_delay;
+  bool bat_active;
+  long bat_delay;
 }
 PS2ProtocolContext;
 
